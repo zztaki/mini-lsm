@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
@@ -279,7 +279,37 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
-        unimplemented!()
+        // unimplemented!()
+        let key = Bytes::copy_from_slice(_key);
+        let res = self.state.read().memtable.get(&key);
+        match res {
+            Some(v) => {
+                if v.is_empty() {
+                    return Ok(None);
+                }
+                Ok(Some(v))
+            }
+            _ => {
+                let mut result = Ok(None);
+                for imm_memtable in self.state.read().imm_memtables.iter() {
+                    let res = imm_memtable.get(&key);
+                    match res {
+                        Some(v) => {
+                            if v.is_empty() {
+                                result = Ok(None);
+                            } else {
+                                result = Ok(Some(v));
+                            }
+                            break;
+                        }
+                        _ => {
+                            continue;
+                        }
+                    }
+                }
+                result
+            }
+        }
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -289,12 +319,28 @@ impl LsmStorageInner {
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+        // unimplemented!()
+        let key = Bytes::copy_from_slice(_key);
+        let value = Bytes::copy_from_slice(_value);
+        // As our memtable implementation only requires an immutable reference for put,
+        // you ONLY need to take the read lock on state in order to modify the memtable.
+        // This allows concurrent access to the memtable from multiple threads.
+        self.state.read().memtable.put(&key, &value)?;
+
+        if self.state.read().memtable.approximate_size() >= self.options.target_sst_size {
+            let state_lock = self.state_lock.lock();
+            if self.state.read().memtable.approximate_size() >= self.options.target_sst_size {
+                self.force_freeze_memtable(&state_lock)?;
+            }
+        }
+        Ok(())
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        unimplemented!()
+        // unimplemented!()
+        let value = &[];
+        self.put(_key, value)
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {
@@ -319,7 +365,24 @@ impl LsmStorageInner {
 
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        unimplemented!()
+        // unimplemented!()
+        // let memtable = MemTable::create_with_wal(self.next_sst_id(), self.path_of_wal(0))?;
+        let mut memtable = Arc::new(MemTable::create(self.next_sst_id()));
+        {
+            // TODO: :( Rust :(
+            // cannot borrow data in an `Arc` as mutable
+            // trait `DerefMut` is required to modify through a dereference, but it is not implemented for `std::sync::Arc<LsmStorageState>`
+            // let mut state = self.state.write();
+            // state.imm_memtables.insert(0, state.memtable.clone());
+            // state.memtable.clone_from(&memtable);
+
+            let mut state_guard = self.state.write();
+            let mut new_state = state_guard.as_ref().clone();
+            std::mem::swap(&mut memtable, &mut new_state.memtable);
+            new_state.imm_memtables.insert(0, memtable);
+            *state_guard = Arc::new(new_state);
+        }
+        Ok(())
     }
 
     /// Force flush the earliest-created immutable memtable to disk
