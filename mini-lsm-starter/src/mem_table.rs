@@ -1,11 +1,12 @@
 #![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
 
+use std::iter;
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use bytes::{Buf, Bytes};
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
@@ -117,7 +118,17 @@ impl MemTable {
 
     /// Get an iterator over a range of keys.
     pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
-        unimplemented!()
+        // unimplemented!()
+
+        let mut iter = MemTableIteratorBuilder {
+            map: self.map.clone(),
+            iter_builder: |map| map.range((map_bound(_lower), map_bound(_upper))),
+            item: (Bytes::new(), Bytes::new()),
+        }
+        .build();
+
+        let _ = iter.next(); // 使用 next 方法，将 item 字段赋值
+        iter
     }
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
@@ -163,18 +174,29 @@ impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        // unimplemented!()
+        self.borrow_item().1.as_ref()
     }
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        // unimplemented!()
+        KeySlice::from_slice(self.borrow_item().0.as_ref())
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        // unimplemented!()
+        self.borrow_item().0.as_ref().len() > 0
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        // unimplemented!()
+        self.with_mut(|this| {
+            *this.item = this
+                .iter
+                .next()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .unwrap_or_default()
+        });
+        Ok(())
     }
 }
