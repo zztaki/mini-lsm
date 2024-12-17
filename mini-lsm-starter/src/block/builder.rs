@@ -15,6 +15,8 @@ pub struct BlockBuilder {
     block_size: usize,
     /// The first key in the block
     first_key: KeyVec,
+    /// The last key in the block
+    last_key: KeyVec,
 }
 
 impl BlockBuilder {
@@ -26,6 +28,7 @@ impl BlockBuilder {
             data: Vec::new(),
             block_size,
             first_key: KeyVec::new(),
+            last_key: KeyVec::new(),
         }
     }
 
@@ -45,6 +48,11 @@ impl BlockBuilder {
         self.data.extend_from_slice(&key.raw_ref());
         self.data.extend(&(value_len as u16).to_be_bytes());
         self.data.extend_from_slice(value);
+        if self.first_key.is_empty() {
+            self.first_key.append(key.raw_ref());
+        }
+        self.last_key.clear();
+        self.last_key.append(key.raw_ref());
         true
     }
 
@@ -61,5 +69,13 @@ impl BlockBuilder {
             data: self.data,
             offsets: self.offsets,
         }
+    }
+
+    pub fn first_key(&self) -> KeyVec {
+        self.first_key.clone()
+    }
+
+    pub fn last_key(&self) -> KeyVec {
+        self.last_key.clone()
     }
 }

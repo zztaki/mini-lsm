@@ -4,6 +4,9 @@
 mod builder;
 mod iterator;
 
+use std::io::Read;
+
+use anyhow::Ok;
 pub use builder::BlockBuilder;
 use bytes::Bytes;
 pub use iterator::BlockIterator;
@@ -41,11 +44,14 @@ impl Block {
         }
         let mut offsets = Vec::new();
 
-        let num_of_entries = u16::from(data[data.len() - 2]) << 8 | u16::from(data[data.len() - 1]);
+        let num_of_entries =
+            u16::from_be_bytes(data[data.len() - 2..data.len()].try_into().unwrap());
         for i in 0..num_of_entries {
-            let offset = u16::from(data[data.len() - 4 - 2 * (i as usize)]) << 8
-                | u16::from(data[data.len() - 3 - 2 * (i as usize)]);
-            offsets.push(offset);
+            offsets.push(u16::from_be_bytes(
+                data[data.len() - 4 - 2 * (i as usize)..data.len() - 2 - 2 * (i as usize)]
+                    .try_into()
+                    .unwrap(),
+            ));
         }
         offsets.reverse();
 
@@ -55,5 +61,14 @@ impl Block {
             offsets,
             data: kv_data,
         }
+    }
+
+    pub fn first_key(&self) -> &[u8] {
+        // unimplemented!()
+        if self.offsets.is_empty() {
+            panic!("Empty block");
+        }
+        let first_key_len = u16::from_be_bytes([self.data[0], self.data[1]]) as usize;
+        &self.data[2..2 + first_key_len]
     }
 }
