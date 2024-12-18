@@ -97,4 +97,9 @@ impl<
         self.move_to_exist()?;
         Ok(())
     }
+
+    fn num_active_iterators(&self) -> usize {
+        // unimplemented!()
+        self.a.num_active_iterators() + self.b.num_active_iterators()
+    }
 }

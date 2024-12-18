@@ -23,7 +23,7 @@ use crate::lsm_iterator::{self, FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
 use crate::mvcc::LsmMvccInner;
-use crate::table::{SsTable, SsTableIterator};
+use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -158,7 +158,9 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        // unimplemented!()
+        self.flush_notifier.send(()).ok();
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
@@ -241,6 +243,9 @@ impl LsmStorageInner {
     /// not exist.
     pub(crate) fn open(path: impl AsRef<Path>, options: LsmStorageOptions) -> Result<Self> {
         let path = path.as_ref();
+        if !path.exists() {
+            std::fs::create_dir_all(path)?;
+        }
         let state = LsmStorageState::create(&options);
 
         let compaction_controller = match &options.compaction_options {
@@ -404,7 +409,33 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        unimplemented!()
+        // unimplemented!()
+        let _state_lock = self.state_lock.lock();
+
+        let memtable_to_flush;
+        let snapshot = {
+            let guard = self.state.read();
+            memtable_to_flush = guard.imm_memtables.last().unwrap().clone();
+        };
+
+        let mut sst_builder = SsTableBuilder::new(self.options.block_size);
+        memtable_to_flush.flush(&mut sst_builder)?;
+        let ss_table = sst_builder.build(
+            memtable_to_flush.id(),
+            Some(Arc::clone(&self.block_cache)),
+            self.path_of_sst(memtable_to_flush.id()),
+        )?;
+        {
+            let mut guard = self.state.write();
+            let mut new_state = guard.as_ref().clone();
+            new_state.l0_sstables.insert(0, memtable_to_flush.id());
+            new_state
+                .sstables
+                .insert(memtable_to_flush.id(), Arc::new(ss_table));
+            new_state.imm_memtables.pop();
+            *guard = Arc::new(new_state);
+        }
+        Ok(())
     }
 
     pub fn new_txn(&self) -> Result<()> {
