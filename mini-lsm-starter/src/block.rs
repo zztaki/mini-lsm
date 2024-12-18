@@ -68,7 +68,7 @@ impl Block {
         if self.offsets.is_empty() {
             panic!("Empty block");
         }
-        let first_key_len = u16::from_be_bytes([self.data[0], self.data[1]]) as usize;
-        &self.data[2..2 + first_key_len]
+        let first_key_len = u16::from_be_bytes([self.data[2], self.data[3]]) as usize;
+        &self.data[4..4 + first_key_len]
     }
 }

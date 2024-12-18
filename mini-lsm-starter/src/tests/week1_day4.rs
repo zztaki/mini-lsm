@@ -121,6 +121,13 @@ fn test_sst_seek_key() {
         for i in 0..num_of_keys() {
             let key = iter.key();
             let value = iter.value();
+            println!(
+                "{} {} {:?} {:?}",
+                offset,
+                i,
+                key.for_testing_key_ref(),
+                key_of(i).for_testing_key_ref()
+            );
             assert_eq!(
                 key.for_testing_key_ref(),
                 key_of(i).for_testing_key_ref(),

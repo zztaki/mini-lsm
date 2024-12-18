@@ -38,14 +38,25 @@ impl BlockBuilder {
         // unimplemented!()
         let key_len = key.len();
         let value_len = value.len();
-        if !self.data.is_empty()
-            && (self.data.len() + self.offsets.len() + key_len + value_len + 4) > self.block_size
-        {
+        let mut common_prefix_len = 0;
+        while common_prefix_len < key_len && common_prefix_len < self.first_key.len() {
+            if key.raw_ref()[common_prefix_len] != self.first_key.raw_ref()[common_prefix_len] {
+                break;
+            }
+            common_prefix_len += 1;
+        }
+        let increase_size = 8 + key_len - common_prefix_len + value_len;
+
+        if !self.data.is_empty() && (self.data.len() + increase_size) > self.block_size {
             return false;
         }
+
         self.offsets.push(self.data.len() as u16);
-        self.data.extend(&(key_len as u16).to_be_bytes());
-        self.data.extend_from_slice(&key.raw_ref());
+        self.data.extend(&(common_prefix_len as u16).to_be_bytes());
+        self.data
+            .extend(&(key_len as u16 - common_prefix_len as u16).to_be_bytes());
+        self.data
+            .extend_from_slice(&key.raw_ref()[common_prefix_len..]);
         self.data.extend(&(value_len as u16).to_be_bytes());
         self.data.extend_from_slice(value);
         if self.first_key.is_empty() {

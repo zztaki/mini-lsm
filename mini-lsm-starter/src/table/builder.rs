@@ -8,7 +8,8 @@ use anyhow::Result;
 use bytes::Bytes;
 use nom::AsBytes;
 
-use super::{BlockMeta, FileObject, SsTable};
+use super::bloom::Bloom;
+use super::{BlockMeta, FileObject, SsTable, SsTableIterator};
 use crate::{
     block::{self, BlockBuilder},
     key::{KeyBytes, KeySlice},
@@ -23,6 +24,9 @@ pub struct SsTableBuilder {
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
     block_size: usize,
+
+    // You may need some fields to store the meta information of the SSTable.
+    key_hashes: Vec<u32>,
 }
 
 impl SsTableBuilder {
@@ -36,6 +40,7 @@ impl SsTableBuilder {
             data: Vec::new(),
             meta: Vec::new(),
             block_size,
+            key_hashes: Vec::new(),
         }
     }
 
@@ -61,6 +66,7 @@ impl SsTableBuilder {
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
         // unimplemented!()
         self.last_key = key.raw_ref().to_vec();
+        self.key_hashes.push(farmhash::fingerprint32(key.raw_ref()));
         if self.builder.add(key, value) {
             return;
         }
@@ -98,7 +104,19 @@ impl SsTableBuilder {
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
         // unimplemented!()
-        let file = super::FileObject::create(path.as_ref(), self.encode())?;
+        let mut sst_encoded = self.encode();
+        let bloom_offset = sst_encoded.len();
+
+        let bloom = Bloom::build_from_key_hashes(
+            &self.key_hashes,
+            Bloom::bloom_bits_per_key(self.key_hashes.len(), 0.01),
+        );
+
+        bloom.encode(&mut sst_encoded);
+        sst_encoded.extend((bloom_offset as u32).to_be_bytes());
+
+        let file = super::FileObject::create(path.as_ref(), sst_encoded)?;
+
         Ok(SsTable {
             file,
             block_meta: self.meta,
@@ -107,7 +125,7 @@ impl SsTableBuilder {
             block_cache,
             first_key: KeyBytes::from_bytes(Bytes::copy_from_slice(self.first_key.as_bytes())),
             last_key: KeyBytes::from_bytes(Bytes::copy_from_slice(self.last_key.as_bytes())),
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: 0,
         })
     }

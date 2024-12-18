@@ -31,10 +31,8 @@ impl BlockIterator {
             first_key: KeyVec::new(),
         };
         if !iter.block.offsets.is_empty() {
-            let first_key_len =
-                u16::from_be_bytes([iter.block.data[0], iter.block.data[1]]) as usize;
-            iter.first_key
-                .append(&iter.block.data[2..2 + first_key_len]); // key_len is u16
+            iter.first_key = iter.get_key(0);
+            println!("new first_key: {:?}", iter.first_key);
         }
         iter
     }
@@ -86,7 +84,7 @@ impl BlockIterator {
         self.idx = 0;
         self.key = self.first_key.clone();
 
-        let value_range_start = 4 + self.first_key.len();
+        let value_range_start = 6 + self.first_key.len();
         let value_range_end = value_range_start
             + u16::from_be_bytes([
                 self.block.data[value_range_start - 2],
@@ -95,6 +93,41 @@ impl BlockIterator {
 
         // key_len and valu_len is u16
         self.value_range = (value_range_start, value_range_end);
+    }
+
+    fn get_overlap_len(&self, entry_offset: usize) -> usize {
+        u16::from_be_bytes([
+            self.block.data[entry_offset],
+            self.block.data[entry_offset + 1],
+        ]) as usize
+    }
+
+    fn get_rest_len(&self, entry_offset: usize) -> usize {
+        u16::from_be_bytes([
+            self.block.data[entry_offset + 2],
+            self.block.data[entry_offset + 3],
+        ]) as usize
+    }
+
+    fn get_key(&self, entry_offset: usize) -> KeyVec {
+        let mut current = KeyVec::new();
+        current.append(&self.first_key.raw_ref()[..self.get_overlap_len(entry_offset)]);
+        current.append(
+            &self.block.data[entry_offset + 4..entry_offset + 4 + self.get_rest_len(entry_offset)],
+        );
+        current
+    }
+
+    fn set_value_range(&mut self, entry_offset: usize) {
+        let rest_len = self.get_rest_len(entry_offset);
+        let value_len = u16::from_be_bytes([
+            self.block.data[entry_offset + 4 + rest_len],
+            self.block.data[entry_offset + 4 + rest_len + 1],
+        ]) as usize;
+        self.value_range = (
+            entry_offset + 4 + rest_len + 2,
+            entry_offset + 4 + rest_len + 2 + value_len,
+        );
     }
 
     /// Move to the next key in the block.
@@ -108,21 +141,10 @@ impl BlockIterator {
         }
 
         let new_entry_start = self.value_range.1;
-        let key_len = u16::from_be_bytes([
-            self.block.data[new_entry_start],
-            self.block.data[new_entry_start + 1],
-        ]) as usize;
-        self.key.clear();
-        self.key
-            .append(&self.block.data[new_entry_start + 2..new_entry_start + 2 + key_len]);
-        let value_len = u16::from_be_bytes([
-            self.block.data[new_entry_start + 2 + key_len],
-            self.block.data[new_entry_start + 2 + key_len + 1],
-        ]) as usize;
-        self.value_range = (
-            new_entry_start + 2 + key_len + 2,
-            new_entry_start + 2 + key_len + 2 + value_len,
-        );
+
+        self.key = self.get_key(new_entry_start);
+
+        self.set_value_range(new_entry_start);
     }
 
     /// Seek to the first key that >= `key`.
@@ -136,20 +158,14 @@ impl BlockIterator {
         while left < right {
             let mid = left + (right - left) / 2;
             let entry_offset = self.block.offsets[mid] as usize;
-
-            let key_len = u16::from_be_bytes([
-                self.block.data[entry_offset],
-                self.block.data[entry_offset + 1],
-            ]) as usize;
-            let mid_key = KeySlice::from_slice(
-                &self.block.data[entry_offset + 2..entry_offset + 2 + key_len],
-            );
-            if mid_key < key {
+            let mid_key = self.get_key(entry_offset);
+            if mid_key < key.to_key_vec() {
                 left = mid + 1;
             } else {
                 right = mid;
             }
         }
+
         self.idx = left;
         if self.idx >= self.block.offsets.len() {
             self.key.clear();
@@ -159,20 +175,17 @@ impl BlockIterator {
 
         // create self.key and self.value_range
         let current_entry_start = self.block.offsets[self.idx] as usize;
-        let key_len = u16::from_be_bytes([
-            self.block.data[current_entry_start],
-            self.block.data[current_entry_start + 1],
-        ]) as usize;
-        self.key.clear();
-        self.key
-            .append(&self.block.data[current_entry_start + 2..current_entry_start + 2 + key_len]);
+        let overlap_len = self.get_overlap_len(current_entry_start);
+        let rest_len = self.get_rest_len(current_entry_start);
+        self.key = self.get_key(current_entry_start);
+
         let value_len = u16::from_be_bytes([
-            self.block.data[current_entry_start + 2 + key_len],
-            self.block.data[current_entry_start + 2 + key_len + 1],
+            self.block.data[current_entry_start + 4 + rest_len],
+            self.block.data[current_entry_start + 4 + rest_len + 1],
         ]) as usize;
         self.value_range = (
-            current_entry_start + 2 + key_len + 2,
-            current_entry_start + 2 + key_len + 2 + value_len,
+            current_entry_start + 4 + rest_len + 2,
+            current_entry_start + 4 + rest_len + 2 + value_len,
         );
     }
 }
