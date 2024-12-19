@@ -1,15 +1,13 @@
-use anyhow::{Ok, Result};
+use anyhow::Result;
+use std::cmp::Ordering;
 
 use super::StorageIterator;
-use crate::key::KeySlice;
 
 /// Merges two iterators of different types into one. If the two iterators have the same key, only
 /// produce the key once and prefer the entry from A.
 pub struct TwoMergeIterator<A: StorageIterator, B: StorageIterator> {
     a: A,
     b: B,
-    // Add fields as need
-    current_is_a: bool,
 }
 
 impl<
@@ -17,40 +15,16 @@ impl<
         B: 'static + for<'a> StorageIterator<KeyType<'a> = A::KeyType<'a>>,
     > TwoMergeIterator<A, B>
 {
-    pub fn move_to_exist(&mut self) -> Result<()> {
-        // unimplemented!()
-        while self.a.is_valid() && self.a.value().is_empty() {
-            self.a.next()?;
-        }
-        while self.b.is_valid() && self.b.value().is_empty() {
-            self.b.next()?;
-        }
-        if self.a.is_valid() && self.b.is_valid() {
-            if self.a.key() == self.b.key() {
-                self.current_is_a = true;
-                self.b.next()?;
-            } else if self.a.key() < self.b.key() {
-                self.current_is_a = true;
-            } else {
-                self.current_is_a = false;
-            }
-        } else if self.a.is_valid() {
-            self.current_is_a = true;
-        } else {
-            self.current_is_a = false;
-        }
-        Ok(())
+    pub fn create(a: A, b: B) -> Result<Self> {
+        Ok(Self { a, b })
     }
 
-    pub fn create(a: A, b: B) -> Result<Self> {
-        // unimplemented!()
-        let mut iter = Self {
-            a,
-            b,
-            current_is_a: true,
-        };
-        iter.move_to_exist()?;
-        Ok(iter)
+    fn is_a_valid(&self) -> bool {
+        match (self.a.is_valid(), self.b.is_valid()) {
+            (true, true) => self.a.key() <= self.b.key(),
+            (true, false) => true,
+            _ => false,
+        }
     }
 }
 
@@ -62,11 +36,7 @@ impl<
     type KeyType<'a> = A::KeyType<'a>;
 
     fn key(&self) -> Self::KeyType<'_> {
-        // unimplemented!()
-        if !self.is_valid() {
-            panic!("Invalid iterator");
-        }
-        if self.current_is_a {
+        if self.is_a_valid() {
             self.a.key()
         } else {
             self.b.key()
@@ -74,8 +44,7 @@ impl<
     }
 
     fn value(&self) -> &[u8] {
-        // unimplemented!()
-        if self.current_is_a {
+        if self.is_a_valid() {
             self.a.value()
         } else {
             self.b.value()
@@ -83,23 +52,37 @@ impl<
     }
 
     fn is_valid(&self) -> bool {
-        // unimplemented!()
         self.a.is_valid() || self.b.is_valid()
     }
 
     fn next(&mut self) -> Result<()> {
-        // unimplemented!()
-        if self.current_is_a {
-            self.a.next()?;
-        } else {
-            self.b.next()?;
+        match (self.a.is_valid(), self.b.is_valid()) {
+            (true, true) => {
+                let cmp = self.a.key().cmp(&self.b.key());
+                match cmp {
+                    Ordering::Less => {
+                        self.a.next()?;
+                    }
+                    Ordering::Greater => {
+                        self.b.next()?;
+                    }
+                    Ordering::Equal => {
+                        self.a.next()?;
+                        self.b.next()?;
+                    }
+                };
+            }
+            (true, false) => {
+                self.a.next()?;
+            }
+            _ => self.b.next()?,
         }
-        self.move_to_exist()?;
+
         Ok(())
     }
 
+    /// Number of underlying active iterators for this iterator.
     fn num_active_iterators(&self) -> usize {
-        // unimplemented!()
         self.a.num_active_iterators() + self.b.num_active_iterators()
     }
 }

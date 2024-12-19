@@ -32,7 +32,6 @@ impl BlockIterator {
         };
         if !iter.block.offsets.is_empty() {
             iter.first_key = iter.get_key(0);
-            println!("new first_key: {:?}", iter.first_key);
         }
         iter
     }

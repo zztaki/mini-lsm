@@ -15,6 +15,7 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
@@ -337,6 +338,20 @@ impl LsmStorageInner {
                 Some(Bytes::copy_from_slice(l0_merge_iter.value())).filter(|v| !v.is_empty())
             );
         }
+
+        let mut l1_ssts = Vec::new();
+        for id in &snapshot.levels[0].1 {
+            let sst = snapshot.sstables.get(id).unwrap();
+            if key_within_sst(sst) {
+                l1_ssts.push(sst.clone());
+                break;
+            }
+        }
+        let l1_concat_iter =
+            SstConcatIterator::create_and_seek_to_key(l1_ssts, KeySlice::from_slice(_key))?;
+        if l1_concat_iter.is_valid() && l1_concat_iter.key().raw_ref() == _key {
+            return Ok(Some(Bytes::copy_from_slice(l1_concat_iter.value())));
+        }
         Ok(None)
     }
 
@@ -514,8 +529,33 @@ impl LsmStorageInner {
             .collect::<Result<_>>()?;
         let l0_merge_iter = MergeIterator::create(l0_iters);
 
+        let mut l1_ssts = Vec::new();
+        for id in &snapshot.levels[0].1 {
+            let sst = snapshot.sstables.get(id).unwrap();
+            if range_overlap_with_sst(sst) {
+                l1_ssts.push(sst.clone());
+            }
+        }
+        let key_slice = match _lower {
+            Bound::Included(x) => KeySlice::from_slice(x),
+            Bound::Excluded(x) => KeySlice::from_slice(x),
+            Bound::Unbounded => KeySlice::default(),
+        };
+        let mut l1_concat_iter = SstConcatIterator::create_and_seek_to_key(l1_ssts, key_slice)?;
+        if let Bound::Excluded(x) = _lower {
+            if x == key_slice.raw_ref() {
+                l1_concat_iter.next()?;
+            }
+        }
+        // if !l1_concat_iter.is_valid() {
+        //     l1_concat_iter = SstConcatIterator::create_and_seek_to_first(vec![])?;
+        // }
+
         Ok(FusedIterator::new(LsmIterator::new(
-            TwoMergeIterator::create(mem_merge_iter, l0_merge_iter)?,
+            TwoMergeIterator::create(
+                TwoMergeIterator::create(mem_merge_iter, l0_merge_iter)?,
+                l1_concat_iter,
+            )?,
             _upper,
         )?))
     }

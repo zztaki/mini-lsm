@@ -44,6 +44,10 @@ impl SsTableBuilder {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty() && self.builder.is_empty()
+    }
+
     pub fn split_block(&mut self) {
         let old_block_builder =
             std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
