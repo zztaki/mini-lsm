@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-use crate::lsm_storage::LsmStorageState;
+use anyhow::{Error, Result};
+
+use crate::{
+    iterators::{
+        concat_iterator::SstConcatIterator, merge_iterator::MergeIterator,
+        two_merge_iterator::TwoMergeIterator, StorageIterator,
+    },
+    lsm_storage::LsmStorageState,
+    table::{SsTableBuilder, SsTableIterator},
+};
 
 #[derive(Debug, Clone)]
 pub struct SimpleLeveledCompactionOptions {
@@ -35,7 +44,47 @@ impl SimpleLeveledCompactionController {
         &self,
         _snapshot: &LsmStorageState,
     ) -> Option<SimpleLeveledCompactionTask> {
-        unimplemented!()
+        // unimplemented!()
+        let l0_sstables = _snapshot.l0_sstables.clone();
+        let levels = _snapshot.levels.clone();
+        assert!(!levels.is_empty());
+        if l0_sstables.len() >= self.options.level0_file_num_compaction_trigger {
+            println!(
+                "compaction triggered at level 0 with {} files",
+                l0_sstables.len()
+            );
+            return Some(SimpleLeveledCompactionTask {
+                upper_level: None,
+                upper_level_sst_ids: l0_sstables,
+                lower_level: 1,
+                lower_level_sst_ids: levels[0].clone().1,
+                is_lower_level_bottom_level: levels.len() == 1,
+            });
+        }
+
+        for i in 1..levels.len() {
+            let upper_level = levels[i - 1].clone().1;
+            let lower_level = levels[i].clone().1;
+            if !upper_level.is_empty()
+                && (lower_level.len() as f64 / upper_level.len() as f64) * 100.0
+                    < self.options.size_ratio_percent as f64
+            {
+                println!(
+                    "compaction triggered at level {} and {} with size ratio {}",
+                    i,
+                    i + 1,
+                    lower_level.len() as f64 / upper_level.len() as f64
+                );
+                return Some(SimpleLeveledCompactionTask {
+                    upper_level: Some(i),
+                    upper_level_sst_ids: upper_level,
+                    lower_level: i + 1,
+                    lower_level_sst_ids: lower_level,
+                    is_lower_level_bottom_level: levels.len() == i + 1,
+                });
+            }
+        }
+        None
     }
 
     /// Apply the compaction result.
@@ -51,6 +100,28 @@ impl SimpleLeveledCompactionController {
         _task: &SimpleLeveledCompactionTask,
         _output: &[usize],
     ) -> (LsmStorageState, Vec<usize>) {
-        unimplemented!()
+        // unimplemented!()
+        let mut new_snapshot = _snapshot.clone();
+
+        if _task.upper_level.is_none() {
+            // L0 + L1 compaction -> L1
+            new_snapshot
+                .l0_sstables
+                .retain(|x| !_task.upper_level_sst_ids.contains(x));
+        } else {
+            new_snapshot.levels[_task.upper_level.unwrap() - 1]
+                .1
+                .retain(|x| !_task.upper_level_sst_ids.contains(x));
+        }
+
+        new_snapshot.levels[_task.lower_level - 1].1 = _output.to_vec();
+
+        let old_sst_ids = _task
+            .upper_level_sst_ids
+            .iter()
+            .chain(_task.lower_level_sst_ids.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        (new_snapshot, old_sst_ids)
     }
 }

@@ -339,18 +339,23 @@ impl LsmStorageInner {
             );
         }
 
-        let mut l1_ssts = Vec::new();
-        for id in &snapshot.levels[0].1 {
-            let sst = snapshot.sstables.get(id).unwrap();
-            if key_within_sst(sst) {
-                l1_ssts.push(sst.clone());
-                break;
+        for level in &snapshot.levels {
+            // TODO: binary search
+            for sst_id in &level.1 {
+                let sst = snapshot.sstables.get(sst_id).unwrap();
+                if sst.first_key().raw_ref() > _key {
+                    break;
+                } else if check_bloom(sst) {
+                    let table = Arc::clone(sst);
+                    let iter =
+                        SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(_key))?;
+                    if iter.is_valid() && iter.key().raw_ref() == _key {
+                        return Ok(
+                            Some(Bytes::copy_from_slice(iter.value())).filter(|v| !v.is_empty())
+                        );
+                    }
+                }
             }
-        }
-        let l1_concat_iter =
-            SstConcatIterator::create_and_seek_to_key(l1_ssts, KeySlice::from_slice(_key))?;
-        if l1_concat_iter.is_valid() && l1_concat_iter.key().raw_ref() == _key {
-            return Ok(Some(Bytes::copy_from_slice(l1_concat_iter.value())));
         }
         Ok(None)
     }
@@ -529,32 +534,34 @@ impl LsmStorageInner {
             .collect::<Result<_>>()?;
         let l0_merge_iter = MergeIterator::create(l0_iters);
 
-        let mut l1_ssts = Vec::new();
-        for id in &snapshot.levels[0].1 {
-            let sst = snapshot.sstables.get(id).unwrap();
-            if range_overlap_with_sst(sst) {
-                l1_ssts.push(sst.clone());
-            }
-        }
         let key_slice = match _lower {
             Bound::Included(x) => KeySlice::from_slice(x),
             Bound::Excluded(x) => KeySlice::from_slice(x),
             Bound::Unbounded => KeySlice::default(),
         };
-        let mut l1_concat_iter = SstConcatIterator::create_and_seek_to_key(l1_ssts, key_slice)?;
-        if let Bound::Excluded(x) = _lower {
-            if x == key_slice.raw_ref() {
-                l1_concat_iter.next()?;
+        let mut level_concat_iters: Vec<Box<SstConcatIterator>> = Vec::new();
+        for (_, ids) in &snapshot.levels {
+            let mut ssts = Vec::new();
+            for id in ids {
+                let sst = snapshot.sstables.get(id).unwrap();
+                if range_overlap_with_sst(sst) {
+                    ssts.push(sst.clone());
+                }
             }
+
+            let mut level_concat_iter = SstConcatIterator::create_and_seek_to_key(ssts, key_slice)?;
+            if let Bound::Excluded(x) = _lower {
+                if x == key_slice.raw_ref() {
+                    level_concat_iter.next()?;
+                }
+            }
+            level_concat_iters.push(Box::new(level_concat_iter));
         }
-        // if !l1_concat_iter.is_valid() {
-        //     l1_concat_iter = SstConcatIterator::create_and_seek_to_first(vec![])?;
-        // }
 
         Ok(FusedIterator::new(LsmIterator::new(
             TwoMergeIterator::create(
                 TwoMergeIterator::create(mem_merge_iter, l0_merge_iter)?,
-                l1_concat_iter,
+                MergeIterator::create(level_concat_iters),
             )?,
             _upper,
         )?))

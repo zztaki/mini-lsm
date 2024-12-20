@@ -22,7 +22,7 @@ use crate::{
 type MergeL0Interator = MergeIterator<SsTableIterator>;
 type LsmIteratorInner = TwoMergeIterator<
     TwoMergeIterator<MergeIterator<MemTableIterator>, MergeL0Interator>,
-    SstConcatIterator,
+    MergeIterator<SstConcatIterator>,
 >;
 
 pub struct LsmIterator {
